@@ -16,7 +16,7 @@ from spectools_ir.utils import  get_molecule_identifier, get_global_identifier, 
 from spectools_ir.slabspec.slabspec import _compute_partition_function
 from spectools_ir.slabspec.helpers import _strip_superfluous_hitran_data, _convert_quantum_strings
 
-def make_spec_twolayer(molecule_name, n_col1, temp1, fwhm1, n_col2, temp2, fwhm2, area, continuum, wmax=40, wmin=1, res=1e-4, isotopologue_number=1, d_pc=1,
+def make_spec_twolayer(molecule_name, n_col1, temp1, v1, fwhm1, n_col2, temp2, v2, fwhm2, area, continuum, wmax=40, wmin=1, res=1e-4, isotopologue_number=1, d_pc=1,
               aupmin=None, eupmax=None, vup=None, swmin=None, parfile=None):
 
     '''
@@ -26,15 +26,18 @@ def make_spec_twolayer(molecule_name, n_col1, temp1, fwhm1, n_col2, temp2, fwhm2
     Parameters
     ---------
     molecule_name : string
-        String identifier for molecule, for example, 'CO', or 'H2O'             
+        String identifier for molecule, for example, 'CO', or 'H2O'
     n_col1, ncol2 : float
         Column densities, in m^-2
     temp1, temp2 : float
         Temperatures of each slab, in K
+    v1, v2: float
+        velocities of each layer in km/s
     fwhm1, fwhm2 : float, optional
         FWHM of local turbulent velocity in km/s.  Note this is NOT the global velocity distribution.
     area : float
-        Area of slab model, in m^2 (same for both layers)
+        Area of slab model, in au^2 (same for both layers)
+        Note that the units are different m^2 as in slabspec; this is for ease of use in MCMC
     continuum: float
         Background (stellar) continuum in Jy; the absorption may go below this value
     wmin : float, optional
@@ -113,15 +116,14 @@ def make_spec_twolayer(molecule_name, n_col1, temp1, fwhm1, n_col2, temp2, fwhm2
     tau1 = afactor1 * (np.exp(-efactor1_1) - np.exp(-efactor1_2)) * phia1
     tau2 = afactor2 * (np.exp(-efactor2_1) - np.exp(-efactor2_2)) * phia2
 
-    # velocity range for each line is -1000 to 1000 km/s
+    # velocity range for each line is -500 to 500 km/s
     # need to make much greater than fwhm so that the intensity really goes to zero at the edges
     # otherwise the interpolation from velocity to wavelength leaves a residual that adds up significantly over all lines
     dvel = 0.1        # km/s
-    nvel = 20001
+    nvel = 10001
     vel = (np.arange(0, nvel) - nvel//2) * dvel   # km/s
-    vel *= 1000                                   # m/s
 
-    omega = area / (d_pc * pc.value)**2
+    omega = area / (d_pc * 206265)**2           # steradians if area is in au^2
     Intens0 = continuum / (omega * si2jy)
 
     nbins = int((wmax - wmin) / res)
@@ -131,12 +133,12 @@ def make_spec_twolayer(molecule_name, n_col1, temp1, fwhm1, n_col2, temp2, fwhm2
     nlines = np.size(hitran_data)
     for i in np.arange(nlines):
         wave0 = 1e6 / wn0[i]
-        tau1v = tau1[i] * np.exp(-vel**2 / (2 * (1000*fwhm1/2.355)**2))
-        tau2v = tau2[i] * np.exp(-vel**2 / (2 * (1000*fwhm2/2.355)**2))
+        tau1v = tau1[i] * np.exp(-(vel-v1)**2 / (2 * (fwhm1/2.355)**2))
+        tau2v = tau2[i] * np.exp(-(vel-v2)**2 / (2 * (fwhm2/2.355)**2))
         Intens1 = 2 * h.value * c.value * wn0[i]**3 / (np.exp(wnfactor1[i]) - 1) * (1 - np.exp(-tau1v))
         Intens2 = 2 * h.value * c.value * wn0[i]**3 / (np.exp(wnfactor2[i]) - 1) * (1 - np.exp(-tau2v))
         Intens = (Intens0 + Intens1) * np.exp(-tau2v) + Intens2
-        wave = wave0 * (1 + vel / c.value)
+        wave = wave0 * (1 + 1000 * vel / c.value)
 
         # add up the contribution from this line without the continuum (otherwise it gets added multiple times)
         totalflux += np.interp(totalwave, wave, Intens-Intens0)
@@ -159,7 +161,7 @@ def make_spec_twolayer(molecule_name, n_col1, temp1, fwhm1, n_col2, temp2, fwhm2
     slabdict['spectrum'] = spectrum_table
 
 # Model params
-    modelparams_table={'area':area*un.meter*un.meter,
+    modelparams_table={'area':area*un.au*un.au,
                        'temp1':temp1*un.K, 'n_col1':n_col1/un.meter/un.meter, 'fwhm1':fwhm1*un.meter/un.s,
                        'temp2':temp2*un.K, 'n_col2':n_col2/un.meter/un.meter, 'fwhm2':fwhm2*un.meter/un.s,
                        'continuum': continuum*un.Jy,
