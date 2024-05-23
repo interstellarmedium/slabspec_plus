@@ -16,7 +16,7 @@ from spectools_ir.utils import  get_molecule_identifier, get_global_identifier, 
 from spectools_ir.slabspec.slabspec import _compute_partition_function
 from spectools_ir.slabspec.helpers import _strip_superfluous_hitran_data, _convert_quantum_strings
 
-def make_spec_twolayer(molecule_name, n_col1, temp1, v1, fwhm1, n_col2, temp2, v2, fwhm2, area, continuum, wmax=40, wmin=1, res=1e-4, isotopologue_number=1, d_pc=1,
+def make_spec_absorption(molecule_name, n_col, temp, v, fwhm, continuum, wmax=40, wmin=1, res=1e-4, isotopologue_number=1, d_pc=1,
               aupmin=None, eupmax=None, vup=None, swmin=None, parfile=None):
 
     '''
@@ -27,19 +27,16 @@ def make_spec_twolayer(molecule_name, n_col1, temp1, v1, fwhm1, n_col2, temp2, v
     ---------
     molecule_name : string
         String identifier for molecule, for example, 'CO', or 'H2O'
-    n_col1, ncol2 : float
-        Column densities, in m^-2
-    temp1, temp2 : float
-        Temperatures of each slab, in K
-    v1, v2: float
-        velocities of each layer in km/s
-    fwhm1, fwhm2 : float, optional
+    n_col : float
+        Column density of absorbing layer, in m^-2
+    temp : float
+        Temperatures of absorbing layer, in K
+    v : float
+        velocity of absorbing layer in km/s
+    fwhm : float, optional
         FWHM of local turbulent velocity in km/s.  Note this is NOT the global velocity distribution.
-    area : float
-        Area of slab model, in au^2 (same for both layers)
-        Note that the units are different m^2 as in slabspec; this is for ease of use in MCMC
     continuum: float
-        Background (stellar) continuum in Jy; the absorption may go below this value
+        Background (stellar) continuum in Jy
     wmin : float, optional
         Minimum wavelength of output spectrum, in microns. Defaults to 1 micron.
     wmax : float, optional
@@ -68,9 +65,8 @@ def make_spec_twolayer(molecule_name, n_col1, temp1, v1, fwhm1, n_col2, temp2, v
           spectrum : wavelength, flux, convolflux, tau
         and two dictionaries
           lines : wave_arr (in microns), flux_arr (in mks), velocity (in km/s) - for plotting individual lines
-          modelparams : model parameters: Area, column density, temperature, local velocity, convolution fwhm
+          modelparams : model parameters: column density, temperature, local velocity, convolution fwhm
     '''
-    si2jy = 1e26                  # SI to Jy flux conversion factor
 
 # Test whether molecule is in HITRAN database.  If not, check for parfile and warn.
     database =_check_hitran(molecule_name)
@@ -99,24 +95,16 @@ def make_spec_twolayer(molecule_name, n_col1, temp1, v1, fwhm1, n_col2, temp2, v
     gup = hitran_data['gp']
 
 # Compute partition function
-    q1 = _compute_partition_function(molecule_name, temp1, isotopologue_number)
-    q2 = _compute_partition_function(molecule_name, temp2, isotopologue_number)
+    Q = _compute_partition_function(molecule_name, temp, isotopologue_number)
     
 # Begin calculations
-    sigma_v1 = fwhm1 / np.sqrt(8*np.log(2))                         # km/s
-    sigma_v2 = fwhm2 / np.sqrt(8*np.log(2))                         # km/s
-    afactor1 = ((aup * gup * n_col1)/(8. * np.pi * q1 *(wn0)**3))   # mks                                                                 
-    afactor2 = ((aup * gup * n_col2)/(8. * np.pi * q2 *(wn0)**3))   # mks                                                                 
-    wnfactor1 = h.value * c.value * wn0 / (k_B.value * temp1)
-    wnfactor2 = h.value * c.value * wn0 / (k_B.value * temp2)
-    phia1 = 1. / (np.sqrt(2.0*np.pi) * sigma_v1 * 1e3)              # mks
-    phia2 = 1. / (np.sqrt(2.0*np.pi) * sigma_v2 * 1e3)              # mks
-    efactor1_2 = hitran_data['eup_k'] / temp1
-    efactor1_1 = hitran_data['elower'] * 1.e2 * h.value * c.value / (k_B.value * temp1)
-    efactor2_2 = hitran_data['eup_k'] / temp2
-    efactor2_1 = hitran_data['elower'] * 1.e2 * h.value * c.value / (k_B.value * temp2)
-    tau1 = afactor1 * (np.exp(-efactor1_1) - np.exp(-efactor1_2)) * phia1
-    tau2 = afactor2 * (np.exp(-efactor2_1) - np.exp(-efactor2_2)) * phia2
+    sigma_v = fwhm / np.sqrt(8*np.log(2))                        # km/s
+    afactor = ((aup * gup * n_col)/(8. * np.pi * Q *(wn0)**3))   # mks                                                                 
+    wnfactor = h.value * c.value * wn0 / (k_B.value * temp)
+    phia = 1. / (np.sqrt(2.0*np.pi) * sigma_v * 1e3)             # mks
+    efactor2 = hitran_data['eup_k'] / temp
+    efactor1 = hitran_data['elower'] * 1.e2 * h.value * c.value / (k_B.value * temp)
+    tau = afactor * (np.exp(-efactor1) - np.exp(-efactor2)) * phia
 
     # velocity range for each line is -500 to 500 km/s
     # need to make much greater than fwhm so that the intensity really goes to zero at the edges
@@ -125,9 +113,6 @@ def make_spec_twolayer(molecule_name, n_col1, temp1, v1, fwhm1, n_col2, temp2, v
     nvel = 10001
     vel = (np.arange(0, nvel) - nvel//2) * dvel   # km/s
 
-    omega = area / (d_pc * 206265)**2           # steradians if area is in au^2
-    Intens0 = continuum / (omega * si2jy)
-
     nbins = int((wmax - wmin) / res)
     totalwave = wmin + (wmax - wmin) * np.arange(nbins) / nbins
     totalflux = np.zeros(nbins)
@@ -135,23 +120,20 @@ def make_spec_twolayer(molecule_name, n_col1, temp1, v1, fwhm1, n_col2, temp2, v
     nlines = np.size(hitran_data)
     for i in np.arange(nlines):
         wave0 = 1e6 / wn0[i]
-        tau1v = tau1[i] * np.exp(-(vel-v1)**2 / (2 * sigma_v1**2))
-        tau2v = tau2[i] * np.exp(-(vel-v2)**2 / (2 * sigma_v2**2))
-        Intens1 = 2 * h.value * c.value * wn0[i]**3 / (np.exp(wnfactor1[i]) - 1) * (1 - np.exp(-tau1v))
-        Intens2 = 2 * h.value * c.value * wn0[i]**3 / (np.exp(wnfactor2[i]) - 1) * (1 - np.exp(-tau2v))
-        Intens = (Intens0 + Intens1) * np.exp(-tau2v) + Intens2
+        tauv = tau[i] * np.exp(-(vel-v)**2 / (2 * sigma_v**2))
+        flux = continuum * np.exp(-tauv)
         wave = wave0 * (1 + 1000 * vel / c.value)
+        #print(f'{wave0:6.4f}, {np.max(tauv):5.3f}')
 
         # add up the contribution from this line without the continuum (otherwise it gets added multiple times)
-        totalflux += np.interp(totalwave, wave, Intens-Intens0)
+        totalflux += np.interp(totalwave, wave, flux-continuum)
 
     # add the continuum back in and convert from intensity to flux in Jy
-    totalflux = (Intens0 + totalflux) * omega * si2jy
+    totalflux = (continuum + totalflux)
     slabdict={}
 
 # Line params
-    hitran_data['tau_peak1'] = tau1
-    hitran_data['tau_peak2'] = tau2
+    hitran_data['tau_peak'] = tau
     hitran_data = _convert_quantum_strings(hitran_data)
     hitran_data = _strip_superfluous_hitran_data(hitran_data)
     slabdict['lineparams'] = hitran_data
@@ -163,9 +145,7 @@ def make_spec_twolayer(molecule_name, n_col1, temp1, v1, fwhm1, n_col2, temp2, v
     slabdict['spectrum'] = spectrum_table
 
 # Model params
-    modelparams_table={'area':area*un.au*un.au,
-                       'temp1':temp1*un.K, 'n_col1':n_col1/un.meter/un.meter, 'fwhm1':fwhm1*un.meter/un.s,
-                       'temp2':temp2*un.K, 'n_col2':n_col2/un.meter/un.meter, 'fwhm2':fwhm2*un.meter/un.s,
+    modelparams_table={'temp':temp*un.K, 'n_col':n_col/un.meter/un.meter, 'fwhm':fwhm*un.meter/un.s,
                        'continuum': continuum*un.Jy,
                        'res':res*un.micron, 
                        'd_pc':d_pc*un.parsec,
